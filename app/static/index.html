@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>短序列号吊销目录 · 历史版本审查</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC",
+         "Microsoft YaHei", sans-serif; background: #f4f6f8; color: #1f2933; }
+  header { background: #102a43; color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 4px 0 0; color: #9fb3c8; font-size: 12px; }
+  main { max-width: 980px; margin: 20px auto; padding: 0 16px; }
+  .card { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px;
+          padding: 16px 20px; margin-bottom: 18px; }
+  .card h2 { margin: 0 0 12px; font-size: 15px; color: #243b53; }
+  label { display: block; font-size: 12px; color: #486581; margin: 8px 0 4px; }
+  select, input, textarea { width: 100%; padding: 7px 9px; font-size: 13px;
+          border: 1px solid #bcccdc; border-radius: 5px; font-family: inherit; }
+  textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+             min-height: 120px; resize: vertical; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  .row > div { flex: 1; min-width: 140px; }
+  button { background: #0b69c4; color: #fff; border: 0; border-radius: 5px;
+           padding: 8px 18px; font-size: 13px; cursor: pointer; }
+  button.secondary { background: #486581; }
+  button:hover { filter: brightness(1.08); }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace;
+          font-size: 12px; word-break: break-all; }
+  .root { background: #f0f4f8; border: 1px solid #d9e2ec; border-radius: 5px;
+          padding: 8px 10px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px;
+           font-size: 12px; font-weight: 600; }
+  .badge.revoked { background: #fde2e2; color: #ab091e; }
+  .badge.not_revoked { background: #def7ec; color: #03543f; }
+  .pass { background: #def7ec; color: #03543f; border: 1px solid #84e1bc;
+          border-radius: 6px; padding: 10px 12px; font-weight: 600; }
+  .fail { background: #fde2e2; color: #ab091e; border: 1px solid #f8b4b4;
+          border-radius: 6px; padding: 10px 12px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border-bottom: 1px solid #e4e7eb; padding: 5px 8px; text-align: left;
+           vertical-align: top; }
+  th { color: #486581; font-weight: 600; }
+  td.lvl { white-space: nowrap; color: #627d98; }
+  .hint { color: #627d98; font-size: 12px; margin-top: 6px; }
+  .error { color: #ab091e; font-size: 13px; margin-top: 8px; }
+  details summary { cursor: pointer; color: #0b69c4; font-size: 13px; }
+  .inline-check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .inline-check input { width: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>四位十六进制短序列号吊销目录</h1>
+  <p>固定 16 层稀疏 Merkle 树 · 按已发布版本审查 · 证明在浏览器本地独立复算（SHA-256，前缀 0x52 / 0x02 / 0x00）</p>
+</header>
+<main>
+  <section class="card">
+    <h2>① 按版本查询</h2>
+    <div class="row">
+      <div>
+        <label for="version">目录版本</label>
+        <select id="version"></select>
+      </div>
+      <div>
+        <label for="serial">短序列号（4 位十六进制）</label>
+        <input id="serial" maxlength="4" placeholder="例如 0A3F / 0000 / FFFF">
+      </div>
+      <div style="flex:0 0 auto">
+        <button id="query">查询并本地复算</button>
+      </div>
+    </div>
+    <div class="inline-check">
+      <input type="checkbox" id="tamper">
+      <label for="tamper" style="margin:0">篡改测试：将第
+        <input id="tamperLevel" type="number" min="1" max="16" value="1"
+               style="width:64px;display:inline-block">
+        层（合并层 1=叶侧,16=根侧）兄弟摘要末位翻转后再复算（应观察到根校验失败）</label>
+    </div>
+    <div id="qerror" class="error" hidden></div>
+  </section>
+
+  <section id="result" class="card" hidden>
+    <h2>② 审查结论</h2>
+    <p>版本根（目录公布）：</p>
+    <div id="versionRoot" class="mono root"></div>
+    <p style="margin-top:12px">序列号 <b id="rSerial"></b> 在该版本状态：
+       <span id="rStatus" class="badge"></span>
+       <span id="rKind" class="hint"></span></p>
+    <div id="conclusion"></div>
+    <p class="hint">本地复算根 = SHA256 逐层合并：叶子 = SHA256(0x52 ‖ 序列号大端2字节 ‖ 状态字节)；
+       分支 = SHA256(0x02 ‖ 左子 ‖ 右子)；路径位按序列号高位→低位。</p>
+
+    <details>
+      <summary>逐层兄弟摘要与复算节点（共 16 层）</summary>
+      <table>
+        <thead><tr><th>合并层(叶0→根16)</th><th>路径位/方向</th><th>兄弟摘要</th>
+        <th>复算后当前摘要</th></tr></thead>
+        <tbody id="layers"></tbody>
+      </table>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>③ 操作员提交批次（≤32 项，乐观并发）</h2>
+    <p class="hint">提交需给出所看到的目录根；若该根已不是最新根，整批拒绝且不生成版本。</p>
+    <label for="expectedRoot">期望根（expected_root，默认使用最新根）</label>
+    <input id="expectedRoot" class="mono" placeholder="64 位十六进制 SHA-256">
+    <label for="items">批次项（每行：序列号,revoked|unrevoked，或直接编辑 JSON）</label>
+    <textarea id="items" class="mono">0A3F,revoked
+0042,revoked</textarea>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:0 0 auto"><button id="submit">提交批次</button></div>
+      <div style="flex:0 0 auto"><button id="fillRoot" class="secondary">填入最新根</button></div>
+    </div>
+    <div id="sresult" class="hint" style="margin-top:10px"></div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

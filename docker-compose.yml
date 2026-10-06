@@ -1,0 +1,38 @@
+services:
+  web:
+    build: .
+    image: revocation-directory:latest
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      DB_PATH: /data/directory.db
+    ports:
+      # configurable host port, e.g. HOST_PORT=9090 docker compose up
+      - "${HOST_PORT:-8080}:8080"
+    volumes:
+      - directory-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import json,urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=5); sys.exit(0 if json.load(r)['status']=='ok' else 1)"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+  # One-shot acceptance service: builds, runs unit tests, then performs live
+  # API/HTTP smoke against `web` and exits 0/1 with the acceptance verdict.
+  # Run with:  docker compose run --rm verify
+  verify:
+    image: revocation-directory:latest
+    build: .
+    entrypoint: ["sh", "scripts/verify.sh"]
+    environment:
+      BASE_URL: http://web:8080
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  directory-data:
